@@ -1,8 +1,0 @@
-
-git clone https://github.com/LBJLincoln/PROJET_N8N_ULTIMATE.git
-cd PROJET_N8N_ULTIMATE
-git checkout claude/import-json-workflows-oUTSl
-
-
-export N8N_API_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIyMTU3NjdlMC05NThhLTRjNzQtYTY3YS1lMzM1ODA3ZWJhNjQiLCJpc3MiOiJuOG4iLCJhdWQiOiJwdWJsaWMtYXBpIiwiaWF0IjoxNzY5MDI2NzQ5fQ.ILpugbzsDXUm856kzHiDg3pWGvaOnTCEIVeTiIgme6Y"
-./scripts/import_to_n8n.sh --all
