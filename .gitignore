@@ -1,0 +1,4 @@
+.env.n8n
+.mcp.json
+.claude/
+node_modules/

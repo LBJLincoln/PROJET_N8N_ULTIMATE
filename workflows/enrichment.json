@@ -1,0 +1,572 @@
+{
+  "name": "Enrichissement Multi-Source V3.0 [PRODUCTION] HARDENED",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{"field": "cronExpression", "expression": "0 2 * * *"}]
+        }
+      },
+      "id": "7bcff2f3-9b65-4490-bbe8-ea0a1d330f8e",
+      "name": "Trigger Scheduler",
+      "type": "n8n-nodes-base.schedule",
+      "typeVersion": 1.2,
+      "position": [0, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Init OpenTelemetry trace for enrichment workflow
+// Shield #9: OTEL Resilience
+const traceId = `tr-enrich-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+
+return {
+  trace_id: traceId,
+  span_context: 'enrichment-parent',
+  timestamp: new Date().toISOString(),
+  status: 'STARTED'
+};"
+      },
+      "id": "5388fc59-6b35-40e8-b875-8a842d15fccb",
+      "name": "Init OT Trace",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [200, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// P0/P1: Distributed Lock for Cron Job - Prevent Overlap
+const jobId = `enrichment-${new Date().toISOString().split('T')[0]}`;
+const lockKey = 'lock:enrichment:daily';
+const ttlSeconds = 7200; // 2 hours max
+const workerId = `worker-${$execution.id}`;
+
+return {
+  lockKey,
+  jobId,
+  workerId,
+  ttlSeconds,
+  trace_id: $node['Init OT Trace'].json.trace_id,
+  action: 'ACQUIRE'
+};"
+      },
+      "id": "791cbef0-562b-4437-8e3f-0b90a4d81ce4",
+      "name": "Prepare Lock",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [400, 400]
+    },
+    {
+      "parameters": {
+        "operation": "set",
+        "key": "={{ $json.lockKey }}",
+        "value": "={{ $json.workerId }}",
+        "options": {
+          "nx": true,
+          "ex": "={{ $json.ttlSeconds }}"
+        }
+      },
+      "id": "redis-lock-acquire",
+      "name": "Redis: Acquire Lock",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [600, 400],
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "redis": {
+          "id": "REDIS_CREDENTIAL_ID",
+          "name": "Redis HA Cluster"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Handle lock acquisition result
+const lockData = $node['Prepare Lock'].json;
+const redisResult = $json;
+
+const lockAcquired = redisResult === 'OK' || redisResult === true || redisResult?.result === 'OK';
+
+if (!lockAcquired) {
+  console.warn('ENRICHMENT_LOCK_FAILED: Another instance running', {
+    lockKey: lockData.lockKey,
+    trace_id: lockData.trace_id
+  });
+  
+  return {
+    ...lockData,
+    lockAcquired: false,
+    status: 'SKIPPED',
+    reason: 'Lock already held - enrichment in progress'
+  };
+}
+
+return {
+  ...lockData,
+  lockAcquired: true,
+  status: 'PROCESSING',
+  lockValue: lockData.workerId
+};"
+      },
+      "id": "lock-result-handler",
+      "name": "Lock Result Handler",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [800, 400]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict"},
+          "conditions": [
+            {
+              "id": "lock-acquired",
+              "leftValue": "={{ $json.lockAcquired }}",
+              "rightValue": true,
+              "operator": {"type": "boolean", "operation": "equals"}
+            }
+          ]
+        }
+      },
+      "id": "check-lock",
+      "name": "Lock Acquired?",
+      "type": "n8n-nodes-base.if",
+      "position": [1000, 400],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "url": "https://internal-api.company.com/cas-usage",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "29e87a7b-9242-447b-b605-995248407b44",
+      "name": "Fetch Internal Use Cases",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [1200, 300],
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "INTERNAL_API_CREDENTIAL_ID",
+          "name": "Internal API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "https://external-data-provider.com/api/docs",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "id": "04c7a554-19c2-4231-9f0e-95dc703881f8",
+      "name": "Fetch External Data Sources",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [1200, 500],
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "EXTERNAL_API_CREDENTIAL_ID",
+          "name": "External API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Normalize & Merge with Hash Deduplication - HARDENED
+const crypto = require('crypto');
+const internal = $items('Fetch Internal Use Cases') || [];
+const external = $items('Fetch External Data Sources') || [];
+
+const seen = new Set();
+const merged = [...internal, ...external]
+  .filter(item => {
+    if (!item.json) return false;
+    const content = JSON.stringify(item.json);
+    const hash = crypto.createHash('md5').update(content).digest('hex');
+    if (seen.has(hash)) return false;
+    seen.add(hash);
+    return true;
+  })
+  .map(item => ({
+    json: {
+      ...item.json,
+      enriched: false,
+      source_sync_date: new Date().toISOString(),
+      dedup_hash: crypto.createHash('md5').update(JSON.stringify(item.json)).digest('hex')
+    }
+  }));
+
+console.log(`Deduplication: ${internal.length + external.length} -> ${merged.length}`);
+return merged;"
+      },
+      "id": "087c43d6-c62e-4365-baba-feb9d762548d",
+      "name": "Normalize & Merge",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1450, 400]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $vars.LLM_API_URL || 'https://api.openai.com/v1/chat/completions' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{
+  "model": "{{ $vars.ENTITY_EXTRACTION_MODEL || 'gpt-4o' }}",
+  "messages": [
+    {
+      "role": "system",
+      "content": "Extract entities, relationships, hypothetical_questions, and key_facts from the data. Entity types: PERSON|ORG|PROJECT|METRIC|DATE|LOCATION. Return JSON: {\\"entities\\": [{\\"name\\": string, \\"type\\": string}], \\"relationships\\": [{\\"source\\": string, \\"type\\": string, \\"target\\": string}], \\"hypothetical_questions\\": [string, string, string], \\"key_facts\\": [string]}"
+    },
+    {
+      "role": "user",
+      "content": "{{ JSON.stringify($json).substring(0, 4000) }}"
+    }
+  ],
+  "temperature": 0.1,
+  "response_format": { "type": "json_object" },
+  "max_tokens": 1500
+}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "ai-entity-enrichment",
+      "name": "AI Entity Enrichment",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [1650, 400],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "LLM_API_CREDENTIAL_ID",
+          "name": "OpenAI API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// PATCH 6.2: Relationship Mapper - Neo4j batch statements
+const aiData = $node['AI Entity Enrichment'].json;
+let extracted = {};
+try {
+  extracted = JSON.parse(aiData.choices?.[0]?.message?.content || '{}');
+} catch (e) {
+  extracted = { entities: [], relationships: [] };
+}
+
+const entities = extracted.entities || [];
+const relationships = extracted.relationships || [];
+const tenantId = $node['Lock Result Handler']?.json?.trace_id?.split('-')[0] || 'default';
+
+// Generate parameterized entity statements
+const entityStatements = entities.map((entity, idx) => ({
+  statement: `MERGE (e:Entity {name: $name_${idx}, type: $type_${idx}, tenant_id: $tenant_${idx}}) 
+              SET e.updated_at = datetime()`,
+  parameters: {
+    [`name_${idx}`]: entity.name,
+    [`type_${idx}`]: entity.type,
+    [`tenant_${idx}`]: tenantId
+  }
+}));
+
+// Generate parameterized relationship statements
+const relationshipStatements = relationships.map((rel, idx) => ({
+  statement: `MATCH (a:Entity {name: $source_${idx}, tenant_id: $tenant_${idx}})
+              MATCH (b:Entity {name: $target_${idx}, tenant_id: $tenant_${idx}})
+              MERGE (a)-[r:${rel.type.toUpperCase().replace(/[^A-Z_]/g, '_')}]->(b)
+              SET r.updated_at = datetime()`,
+  parameters: {
+    [`source_${idx}`]: rel.source,
+    [`target_${idx}`]: rel.target,
+    [`tenant_${idx}`]: tenantId
+  }
+}));
+
+return {
+  entity_statements: entityStatements,
+  relationship_statements: relationshipStatements,
+  total_entities: entities.length,
+  total_relationships: relationships.length,
+  trace_id: $node['Lock Result Handler'].json.trace_id
+};"
+      },
+      "id": "relationship-mapper-neo4j",
+      "name": "Relationship Mapper Neo4j",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1850, 400]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $vars.PINECONE_URL }}/vectors/upsert",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={
+  "vectors": [{
+    "id": "{{ $node['Normalize & Merge'].json.dedup_hash }}",
+    "values": {{ JSON.stringify($node['Normalize & Merge'].json.embedding || []) }},
+    "metadata": {{ JSON.stringify($node['Normalize & Merge'].json) }}
+  }]
+}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "upsert-vectors-pinecone",
+      "name": "Upsert Vectors Pinecone",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [2050, 200],
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PINECONE_API_CREDENTIAL_ID",
+          "name": "Pinecone API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "schema": "public",
+        "table": "enriched_metadata",
+        "columns": "dedup_hash, source_data, sync_date",
+        "options": {}
+      },
+      "id": "store-metadata-postgres",
+      "name": "Store Metadata Postgres",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [2050, 400],
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "postgres": {
+          "id": "POSTGRES_CREDENTIAL_ID",
+          "name": "Postgres Production"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $vars.NEO4J_URL }}/db/neo4j/tx/commit",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={
+  "statements": {{ JSON.stringify([
+    ...$node['Relationship Mapper Neo4j'].json.entity_statements,
+    ...$node['Relationship Mapper Neo4j'].json.relationship_statements
+  ]) }}
+}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "update-graph-neo4j",
+      "name": "Update Graph Neo4j",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [2050, 600],
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "NEO4J_CREDENTIAL_ID",
+          "name": "Neo4j Basic Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $vars.NEO4J_URL }}/community-detection/trigger",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={
+  "algorithm": "louvain",
+  "min_community_size": 5,
+  "tenant_id": "{{ $node['Relationship Mapper Neo4j'].json.trace_id.split('-')[0] || 'default' }}"
+}",
+        "options": {
+          "timeout": 5000,
+          "ignoreResponseCode": true
+        }
+      },
+      "id": "community-detection-trigger",
+      "name": "Community Detection Trigger (Async)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [2250, 400],
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "NEO4J_CREDENTIAL_ID",
+          "name": "Neo4j Basic Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Prepare lock release
+const mapperData = $node['Relationship Mapper Neo4j'].json;
+
+return {
+  lockKey: $node['Lock Result Handler'].json.lockKey,
+  lockValue: $node['Lock Result Handler'].json.lockValue,
+  trace_id: mapperData.trace_id
+};"
+      },
+      "id": "prepare-lock-release",
+      "name": "Prepare Lock Release",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2450, 400]
+    },
+    {
+      "parameters": {
+        "operation": "eval",
+        "script": "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
+        "keys": "={{ $json.lockKey }}",
+        "arguments": "={{ $json.lockValue }}"
+      },
+      "id": "redis-lock-release",
+      "name": "Redis: Release Lock",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [2650, 400],
+      "credentials": {
+        "redis": {
+          "id": "REDIS_CREDENTIAL_ID",
+          "name": "Redis HA Cluster"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Log success
+return {
+  status: 'SUCCESS',
+  trace_id: $node['Prepare Lock Release'].json.trace_id,
+  timestamp: new Date().toISOString()
+};"
+      },
+      "id": "log-success",
+      "name": "Log Success",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2850, 400]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $vars.OTEL_COLLECTOR_URL || 'https://otel-collector.internal' }}/v1/traces",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={
+  "traceId": "{{ $json.trace_id }}",
+  "spanName": "enrichment_complete",
+  "status": "{{ $json.status }}",
+  "timestamp": "{{ $json.timestamp }}"
+}",
+        "options": {
+          "timeout": 5000
+        }
+      },
+      "id": "export-trace-otel",
+      "name": "Export Trace to OpenTelemetry",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [3050, 400]
+    }
+  ],
+  "connections": {
+    "Trigger Scheduler": {
+      "main": [[{"node": "Init OT Trace", "type": "main", "index": 0}]]
+    },
+    "Init OT Trace": {
+      "main": [[{"node": "Prepare Lock", "type": "main", "index": 0}]]
+    },
+    "Prepare Lock": {
+      "main": [[{"node": "Redis: Acquire Lock", "type": "main", "index": 0}]]
+    },
+    "Redis: Acquire Lock": {
+      "main": [[{"node": "Lock Result Handler", "type": "main", "index": 0}]]
+    },
+    "Lock Result Handler": {
+      "main": [[{"node": "Lock Acquired?", "type": "main", "index": 0}]]
+    },
+    "Lock Acquired?": {
+      "main": [
+        [
+          {"node": "Fetch Internal Use Cases", "type": "main", "index": 0},
+          {"node": "Fetch External Data Sources", "type": "main", "index": 0}
+        ],
+        []
+      ]
+    },
+    "Fetch Internal Use Cases": {
+      "main": [[{"node": "Normalize & Merge", "type": "main", "index": 0}]]
+    },
+    "Fetch External Data Sources": {
+      "main": [[{"node": "Normalize & Merge", "type": "main", "index": 0}]]
+    },
+    "Normalize & Merge": {
+      "main": [[{"node": "AI Entity Enrichment", "type": "main", "index": 0}]]
+    },
+    "AI Entity Enrichment": {
+      "main": [[{"node": "Relationship Mapper Neo4j", "type": "main", "index": 0}]]
+    },
+    "Relationship Mapper Neo4j": {
+      "main": [
+        [{"node": "Upsert Vectors Pinecone", "type": "main", "index": 0}],
+        [{"node": "Store Metadata Postgres", "type": "main", "index": 0}],
+        [{"node": "Update Graph Neo4j", "type": "main", "index": 0}]
+      ]
+    },
+    "Upsert Vectors Pinecone": {
+      "main": [[{"node": "Community Detection Trigger (Async)", "type": "main", "index": 0}]]
+    },
+    "Store Metadata Postgres": {
+      "main": [[{"node": "Community Detection Trigger (Async)", "type": "main", "index": 0}]]
+    },
+    "Update Graph Neo4j": {
+      "main": [[{"node": "Community Detection Trigger (Async)", "type": "main", "index": 0}]]
+    },
+    "Community Detection Trigger (Async)": {
+      "main": [[{"node": "Prepare Lock Release", "type": "main", "index": 0}]]
+    },
+    "Prepare Lock Release": {
+      "main": [[{"node": "Redis: Release Lock", "type": "main", "index": 0}]]
+    },
+    "Redis: Release Lock": {
+      "main": [[{"node": "Log Success", "type": "main", "index": 0}]]
+    },
+    "Log Success": {
+      "main": [[{"node": "Export Trace to OpenTelemetry", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveExecutionProgress": true,
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "meta": {
+    "instanceId": "prod-chaos-hardened-2026"
+  }
+}
