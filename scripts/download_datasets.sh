@@ -1,4 +1,3 @@
-DOWNLOAD_DATASETS = """
 import os
 import subprocess
 import requests
@@ -59,4 +58,4 @@ safe_download('https://huggingface.co/datasets/Shitao/bge-reranker-data/resolve/
 
 os.chdir('..')
 print("Fin. Vérifiez datasets/.")
-"""
+
