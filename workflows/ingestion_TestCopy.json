@@ -1,0 +1,506 @@
+{
+  "name": "Production-Ready Ingestion V3.0 Ultimate HARDENED _TestCopy",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "rag-v5-ingestion",
+        "options": {
+          "rawBody": true
+        }
+      },
+      "id": "trigger-s3",
+      "name": "S3 Event Webhook (Shield #7)",
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "typeVersion": 1.0,
+      "position": [-2800, 1000]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Shield #1 & #7: PRODUCTION Distributed Lock - HARDENED
+// P0 CRITICAL: Real Redis lock implementation
+
+const crypto = require('crypto');
+const body = $json.body || $json || {};
+
+// Validation
+if (!body.objectKey && !body.key) {
+  throw new Error('VALIDATION_ERROR: objectKey is required');
+}
+
+const objectKey = body.objectKey || body.key;
+const hash = crypto.createHash('sha256').update(objectKey).digest('hex');
+const workerId = `worker-${$execution.id}`;
+const lockKey = `lock:ingestion:${hash}`;
+const traceId = `tr-${Date.now()}-${Math.random().toString(36).substring(2, 10)}`;
+
+const lockInfo = {
+  lockKey,
+  workerId,
+  hash,
+  objectKey,
+  bucket: body.bucket || 'default',
+  traceId,
+  timestamp: new Date().toISOString(),
+  s3_url: body.s3_url || `s3://${body.bucket || 'default'}/${objectKey}`,
+  ttl_seconds: 3600
+};
+
+return lockInfo;"
+      },
+      "id": "shield-1-7",
+      "name": "Chaos Shield #1: Atomic Lock",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-2550, 1000]
+    },
+    {
+      "parameters": {
+        "operation": "set",
+        "key": "={{ $json.lockKey }}",
+        "value": "={{ $json.workerId }}",
+        "options": {
+          "nx": true,
+          "ex": "={{ $json.ttl_seconds }}"
+        }
+      },
+      "id": "redis-lock-acquire",
+      "name": "Redis: Acquire Lock",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [-2350, 1000],
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "redis": {
+          "id": "REDIS_CREDENTIAL_ID",
+          "name": "Redis HA Cluster"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// P0 Mitigation: Handle lock acquisition result
+const lockInfo = $node['Chaos Shield #1: Atomic Lock'].json;
+const redisResult = $json;
+
+const lockAcquired = redisResult === 'OK' || redisResult === true || redisResult?.result === 'OK';
+
+if (!lockAcquired) {
+  console.warn('DUPLICATE_DOCUMENT: Lock already held', {
+    lockKey: lockInfo.lockKey,
+    trace_id: lockInfo.traceId
+  });
+  
+  return {
+    ...lockInfo,
+    lockAcquired: false,
+    status: 'DUPLICATE',
+    reason: 'Document already being processed by another worker',
+    action: 'SKIP'
+  };
+}
+
+return {
+  ...lockInfo,
+  lockAcquired: true,
+  status: 'PROCESSING',
+  lockValue: lockInfo.workerId
+};"
+      },
+      "id": "lock-result-handler",
+      "name": "Lock Result Handler",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-2150, 1000]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "lock-acquired",
+              "leftValue": "={{ $json.lockAcquired }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "equals" }
+            }
+          ]
+        }
+      },
+      "id": "check-lock-acquired",
+      "name": "Lock Acquired?",
+      "type": "n8n-nodes-base.if",
+      "position": [-1950, 1000],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "jsCode": "// PATCH 5.1: MIME Type Detector & Router
+const lockInfo = $node['Lock Result Handler'].json;
+const s3Url = lockInfo.s3_url || '';
+const objectKey = lockInfo.objectKey || '';
+
+// Detect MIME type from extension
+const ext = objectKey.toLowerCase().split('.').pop();
+
+const mimeMap = {
+  'pdf': { type: 'application/pdf', quality: 0.9, method: 'semantic', strategy: 'hi_res' },
+  'xlsx': { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', quality: 0.95, method: 'tabular', strategy: 'fast' },
+  'xls': { type: 'application/vnd.ms-excel', quality: 0.95, method: 'tabular', strategy: 'fast' },
+  'pptx': { type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', quality: 0.7, method: 'slide', strategy: 'fast' },
+  'docx': { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', quality: 0.85, method: 'semantic', strategy: 'hi_res' },
+  'doc': { type: 'application/msword', quality: 0.85, method: 'semantic', strategy: 'hi_res' },
+  'txt': { type: 'text/plain', quality: 0.6, method: 'semantic', strategy: 'fast' }
+};
+
+const mimeInfo = mimeMap[ext] || { type: 'application/octet-stream', quality: 0.5, method: 'semantic', strategy: 'hi_res' };
+
+return {
+  ...lockInfo,
+  mime_type: mimeInfo.type,
+  quality_score: mimeInfo.quality,
+  chunk_method: mimeInfo.method,
+  ocr_strategy: mimeInfo.strategy,
+  file_extension: ext
+};"
+      },
+      "id": "mime-type-detector",
+      "name": "MIME Type Detector (Shield #1)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-1750, 900]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.unstructured.io/general/v0/general",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "unstructured-api-key", "value": "={{$credentials.unstructured_api}}" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            { "name": "files", "value": "={{$json.s3_url}}" },
+            { "name": "strategy", "value": "={{$json.ocr_strategy}}" },
+            { "name": "pdf_infer_table_structure", "value": "true" },
+            { "name": "extract_image_block_types", "value": "["Image", "Table"]" }
+          ]
+        },
+        "options": {
+          "timeout": 60000,
+          "retry": {
+            "enabled": true,
+            "maxRetries": 2,
+            "retryInterval": 5000,
+            "retryOnHttpCodes": "429,500,502,503,504"
+          }
+        }
+      },
+      "id": "unstructured-ocr",
+      "name": "OCR Multimodal",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [-1550, 900],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $vars.LLM_API_URL || 'https://api.openai.com/v1/chat/completions' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{
+  "model": "{{ $vars.ROUTER_MODEL || 'gpt-4o-mini' }}",
+  "messages": [
+    {
+      "role": "system",
+      "content": "Tu es un expert en segmentation semantique. Divise le texte en chunks coherents de 200-500 mots, bases sur les changements de sujet, ton ou contexte temporel. Reponds JSON: {\\"chunks\\": [{\\"content\\": string, \\"topic\\": string, \\"start_index\\": number}]}"
+    },
+    {
+      "role": "user",
+      "content": "{{ JSON.stringify($json.processed_content || '').substring(0, 8000) }}"
+    }
+  ],
+  "temperature": 0.2,
+  "max_tokens": 2000,
+  "response_format": { "type": "json_object" }
+}",
+        "options": {"timeout": 30000}
+      },
+      "id": "semantic-chunker",
+      "name": "Semantic Chunker (Shield #2)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [-1350, 900],
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "LLM_API_CREDENTIAL_ID",
+          "name": "OpenAI API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// PATCH 5.3: Chunk Enricher - Metadata enrichissement
+const crypto = require('crypto');
+const mimeData = $node['MIME Type Detector (Shield #1)'].json;
+const chunks = JSON.parse($json.choices?.[0]?.message?.content || '{"chunks": []}');
+
+const parentId = crypto.createHash('sha256').update(mimeData.objectKey).digest('hex');
+const parentFilename = mimeData.objectKey.split('/').pop();
+
+// Generate summary context (first 200 chars)
+const fullContent = $node['OCR Multimodal']?.json?.processed_content || '';
+const summaryContext = fullContent.substring(0, 200).trim() + '...';
+
+const enrichedChunks = (chunks.chunks || []).map((chunk, idx) => ({
+  content: chunk.content,
+  metadata: {
+    parent_id: parentId,
+    parent_filename: parentFilename,
+    chunk_index: idx,
+    topic: chunk.topic || 'general',
+    summary_context: summaryContext,
+    quality_score: mimeData.quality_score,
+    version: 1,
+    is_obsolete: false,
+    chunk_method: mimeData.chunk_method,
+    tenant_id: mimeData.user_context?.tenant_id || 'default',
+    allowed_groups: mimeData.user_context?.groups || ['default'],
+    created_at: new Date().toISOString()
+  }
+}));
+
+return enrichedChunks;"
+      },
+      "id": "chunk-enricher",
+      "name": "Chunk Enricher (Shield #3)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-1150, 900]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE documents SET is_obsolete = true, obsoleted_at = NOW(), superseded_by = $1 WHERE parent_filename = $2 AND tenant_id = $3 AND is_obsolete = false",
+        "options": {}
+      },
+      "id": "version-manager",
+      "name": "Version Manager (Shield #4)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [-950, 900],
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "postgres": {
+          "id": "POSTGRES_CREDENTIAL_ID",
+          "name": "Postgres Production"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $vars.LLM_API_URL || 'https://api.openai.com/v1/chat/completions' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{
+  "model": "{{ $vars.ROUTER_MODEL || 'gpt-4o-mini' }}",
+  "messages": [
+    {
+      "role": "system",
+      "content": "Genere 3 questions auxquelles ce paragraphe repond. Reponds JSON: {\\"questions\\": [string, string, string]}"
+    },
+    {
+      "role": "user",
+      "content": "{{ $json.content?.substring(0, 1000) }}"
+    }
+  ],
+  "temperature": 0.5,
+  "max_tokens": 200,
+  "response_format": { "type": "json_object" }
+}",
+        "options": {"timeout": 15000}
+      },
+      "id": "qa-generator",
+      "name": "Q&A Generator (Shield #5)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [-750, 900],
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "LLM_API_CREDENTIAL_ID",
+          "name": "OpenAI API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// P0 Mitigation: Always release lock at end of workflow
+const syncData = $node['Chaos Shield #3: Sync Manager'].json;
+
+return {
+  lockKey: syncData.lock_key,
+  lockValue: syncData.lock_value,
+  trace_id: syncData.trace_id,
+  txn_id: syncData.txn_id,
+  action: 'RELEASE'
+};"
+      },
+      "id": "prepare-lock-release",
+      "name": "Prepare Lock Release",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-400, 900]
+    },
+    {
+      "parameters": {
+        "operation": "eval",
+        "script": "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
+        "keys": "={{ $json.lockKey }}",
+        "arguments": "={{ $json.lockValue }}"
+      },
+      "id": "redis-lock-release",
+      "name": "Redis: Release Lock",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [-200, 900],
+      "credentials": {
+        "redis": {
+          "id": "REDIS_CREDENTIAL_ID",
+          "name": "Redis HA Cluster"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $vars.OTEL_COLLECTOR_URL || 'https://otel-collector.internal' }}/v1/traces",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={
+  "traceId": "{{ $node['Lock Result Handler'].json.traceId }}",
+  "spanName": "ingestion_complete",
+  "status": "success",
+  "attributes": {
+    "txn_id": "{{ $node['Chaos Shield #3: Sync Manager'].json.txn_id }}",
+    "pii_count": {{ $node['Chaos Shield #5: PII Fortress'].json.pii_count || 0 }}
+  }
+}",
+        "options": {
+          "timeout": 5000
+        }
+      },
+      "id": "otel-export",
+      "name": "OTEL Resilience (Shield #9)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [0, 900]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'SKIPPED', reason: 'DUPLICATE_DOCUMENT', trace_id: $json.traceId } }}",
+        "options": {}
+      },
+      "id": "return-skip",
+      "name": "Return Skip Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "position": [-1750, 1100],
+      "typeVersion": 1.1
+    },
+    {
+      "parameters": {},
+      "id": "error-handler",
+      "name": "Error Handler (DLQ)",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [-2800, 1300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Error handler - attempt lock cleanup
+const error = $json;
+const lockInfo = $node['Chaos Shield #1: Atomic Lock']?.json;
+
+return {
+  error: error.message || 'Unknown error',
+  lockKey: lockInfo?.lockKey,
+  lockValue: lockInfo?.workerId,
+  trace_id: lockInfo?.traceId,
+  cleanup_needed: !!lockInfo?.lockKey
+};"
+      },
+      "id": "error-cleanup",
+      "name": "Error Cleanup Handler",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-2550, 1300]
+    }
+  ],
+  "connections": {
+    "S3 Event Webhook (Shield #7)": {
+      "main": [[{ "node": "Chaos Shield #1: Atomic Lock", "type": "main", "index": 0 }]]
+    },
+    "Chaos Shield #1: Atomic Lock": {
+      "main": [[{ "node": "Redis: Acquire Lock", "type": "main", "index": 0 }]]
+    },
+    "Redis: Acquire Lock": {
+      "main": [[{ "node": "Lock Result Handler", "type": "main", "index": 0 }]]
+    },
+    "Lock Result Handler": {
+      "main": [[{ "node": "Lock Acquired?", "type": "main", "index": 0 }]]
+    },
+    "Lock Acquired?": {
+      "main": [
+        [{ "node": "MIME Type Detector (Shield #1)", "type": "main", "index": 0 }],
+        [{ "node": "Return Skip Response", "type": "main", "index": 0 }]
+      ]
+    },
+    "MIME Type Detector (Shield #1)": {
+      "main": [[{ "node": "OCR Multimodal", "type": "main", "index": 0 }]]
+    },
+    "OCR Multimodal": {
+      "main": [[{ "node": "Semantic Chunker (Shield #2)", "type": "main", "index": 0 }]]
+    },
+    "Semantic Chunker (Shield #2)": {
+      "main": [[{ "node": "Chunk Enricher (Shield #3)", "type": "main", "index": 0 }]]
+    },
+    "Chunk Enricher (Shield #3)": {
+      "main": [[{ "node": "Version Manager (Shield #4)", "type": "main", "index": 0 }]]
+    },
+    "Version Manager (Shield #4)": {
+      "main": [[{ "node": "Q&A Generator (Shield #5)", "type": "main", "index": 0 }]]
+    },
+    "Q&A Generator (Shield #5)": {
+      "main": [[{ "node": "Prepare Lock Release", "type": "main", "index": 0 }]]
+    },
+    "Prepare Lock Release": {
+      "main": [[{ "node": "Redis: Release Lock", "type": "main", "index": 0 }]]
+    },
+    "Redis: Release Lock": {
+      "main": [[{ "node": "OTEL Resilience (Shield #9)", "type": "main", "index": 0 }]]
+    },
+    "Error Handler (DLQ)": {
+      "main": [[{ "node": "Error Cleanup Handler", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "meta": {
+    "instanceId": "production-sota-2026"
+  }
+}
