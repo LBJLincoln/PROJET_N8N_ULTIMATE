@@ -58,4 +58,3 @@ safe_download('https://huggingface.co/datasets/Shitao/bge-reranker-data/resolve/
 
 os.chdir('..')
 print("Fin. Vérifiez datasets/.")
-
