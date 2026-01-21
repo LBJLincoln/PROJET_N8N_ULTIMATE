@@ -1,5 +1,5 @@
 {
-  "name": "Production-Ready Ingestion V3.0 Ultimate HARDENED",
+  "name": "Production-Ready Ingestion V3.0 Ultimate HARDENED _TestCopy",
   "nodes": [
     {
       "parameters": {
@@ -11,8 +11,8 @@
       },
       "id": "trigger-s3",
       "name": "S3 Event Webhook (Shield #7)",
-      "type": "n8n-nodes-base.webhook",
-      "typeVersion": 2.1,
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "typeVersion": 1.0,
       "position": [-2800, 1000]
     },
     {
