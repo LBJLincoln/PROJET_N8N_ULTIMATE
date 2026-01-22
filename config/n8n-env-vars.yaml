@@ -1,0 +1,111 @@
+# ============================================
+# N8N MCP ULTIMATE - Environment Configuration
+# ============================================
+# Generated: 2026-01-22
+# Session: claude/setup-db-env-config-lLxYQ
+# Description: Environment variables template for n8n RAG system
+#
+# IMPORTANT: This file contains PLACEHOLDERS only.
+# Actual credentials should be stored in:
+#   - .env file (for local use) - see .env.example
+#   - GitHub Secrets (for CI/CD)
+#   - n8n Credentials (for workflows)
+# ============================================
+
+# ============================================
+# DATABASE - SUPABASE POSTGRESQL
+# ============================================
+database:
+  postgres:
+    host: db.ayqviqmxifzmhphiqfmj.supabase.co
+    port: 5432
+    database: postgres
+    username: postgres
+    password: ${POSTGRES_PASSWORD}
+    connection_string: ${POSTGRES_URL}
+    supabase_url: https://ayqviqmxifzmhphiqfmj.supabase.co/
+    ssl_mode: require
+
+# ============================================
+# CACHE - REDIS (UPSTASH)
+# ============================================
+cache:
+  redis:
+    url: https://dynamic-frog-47846.upstash.io
+    token: ${REDIS_TOKEN}
+    rest_url: https://dynamic-frog-47846.upstash.io
+    redis_url: ${REDIS_URL}
+
+# ============================================
+# N8N CLOUD
+# ============================================
+n8n:
+  url: https://amoret.app.n8n.cloud/
+  api_url: https://amoret.app.n8n.cloud/api/v1
+  api_key: ${N8N_API_KEY}
+
+# ============================================
+# GRAPH DATABASE - NEO4J
+# ============================================
+graph:
+  neo4j:
+    url: neo4j+s://a9a062c3.databases.neo4j.io
+    username: neo4j
+    password: ${NEO4J_PASSWORD}
+
+# ============================================
+# VECTOR DATABASE - PINECONE
+# ============================================
+vector:
+  pinecone:
+    api_key: ${PINECONE_API_KEY}
+    dashboard_url: https://app.pinecone.io/organizations/-OjWaLUpl2QxyD3EWSrR/projects/eef3fbb7-d9ef-4b74-adc8-091dedb38c5a/index-quickstart
+    index_name: ${PINECONE_INDEX_NAME}
+
+# ============================================
+# LLM - OPENAI
+# ============================================
+llm:
+  openai:
+    api_key: ${OPENAI_API_KEY}
+    api_url: https://api.openai.com/v1/chat/completions
+    embedding_url: https://api.openai.com/v1/embeddings
+    models:
+      default: gpt-4-turbo
+      router: gpt-4o-mini
+      hyde: gpt-4o
+      sql: gpt-4o
+    embedding_model: text-embedding-3-large
+
+# ============================================
+# RERANKER - COHERE
+# ============================================
+reranker:
+  cohere:
+    api_key: ${COHERE_API_KEY}
+    api_url: https://api.cohere.ai/v1/rerank
+    model: rerank-multilingual-v3.0
+
+# ============================================
+# N8N CREDENTIALS MAPPING
+# ============================================
+# These are the credential names to use in n8n workflows
+n8n_credentials:
+  postgres: "Supabase PostgreSQL"
+  redis: "Upstash Redis"
+  neo4j: "Neo4j Graph DB"
+  pinecone: "Pinecone Vector DB"
+  openai: "OpenAI API"
+  cohere: "Cohere Reranker"
+
+# ============================================
+# REQUIRED GITHUB SECRETS
+# ============================================
+# Add these secrets to your GitHub repository:
+# - POSTGRES_PASSWORD
+# - REDIS_TOKEN
+# - OPENAI_API_KEY
+# - PINECONE_API_KEY
+# - COHERE_API_KEY
+# - NEO4J_PASSWORD (optional)
+# - N8N_API_KEY (optional)
