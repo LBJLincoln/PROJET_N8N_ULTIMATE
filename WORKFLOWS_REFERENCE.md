@@ -21,7 +21,8 @@ Complete technical documentation for all 9 workflows, including architecture, no
 10. [Monitor Workflow](#6-monitor-workflow)
 11. [Orchestrator Workflow](#7-orchestrator-workflow-master-router)
 12. [TestCopy Workflows](#8-testcopy-workflows)
-13. [Workflow Dependencies](#workflow-dependencies)
+13. [Dataset Download Workflow](#9-dataset-download-workflow)
+14. [Workflow Dependencies](#workflow-dependencies)
 
 ---
 
@@ -56,6 +57,7 @@ User Query
 | **Orchestrator** | orchestrator.json | 353 | Master router and query classification |
 | **Orchestrator TestCopy** | orchestrator_TestCopy.json | 353 | Test version with Chat Trigger |
 | **Ingestion TestCopy** | ingestion_TestCopy.json | 506 | Test version with Chat Trigger |
+| **Dataset Download** | dataset_download.json | ~400 | Download ML datasets for testing |
 
 ---
 
@@ -1326,6 +1328,151 @@ curl -X POST "https://amoret.app.n8n.cloud/webhook/rag-tabular" \
 
 ---
 
+---
+
+## 9. Dataset Download Workflow
+
+**File:** `workflows/dataset_download.json`
+**Purpose:** Download and manage ML evaluation datasets for testing and improving the RAG system
+
+### Architecture
+
+```
+User Input (Webhook/Chat)
+    ↓
+[Dataset Registry] ← 13 datasets defined
+    ↓
+[Command Parser] ← Parse: list, download, status, trigger-github
+    ↓
+[Command Switch]
+    ├─→ [List Datasets] → Display all available datasets
+    ├─→ [Prepare Download] → HTTP downloads
+    ├─→ [Check Status] → Show download status
+    └─→ [Trigger GitHub Action] → Full git clone downloads
+         ↓
+[Format Response] → Return formatted result
+```
+
+### Available Datasets
+
+| ID | Name | Type | Description |
+|:---|:-----|:-----|:------------|
+| `bbh` | BIG-Bench Hard | Git | Challenging reasoning tasks |
+| `spider2` | Spider2 SQL | Git | SQL/database understanding tasks |
+| `hotpotqa` | HotpotQA | HTTP | Multi-hop question answering |
+| `musique` | MuSiQue | Git | Multi-step reasoning |
+| `strategyqa` | StrategyQA | Git | Strategic reasoning |
+| `msmarco` | MS MARCO | HTTP | Large-scale ranking dataset |
+| `tabfact` | Table Fact Checking | Git | Tabular data verification |
+| `gsm8k` | GSM8K | Git | Grade school math problems |
+| `squad` | SQuAD 2.0 | HTTP | Reading comprehension |
+| `pubmedqa` | PubMedQA | Git | Biomedical QA |
+| `wikihop` | WikiHop | HTTP | Knowledge-based QA |
+| `climatefever` | Climate FEVER | Git | Climate claims verification |
+| `reranker` | BGE Reranker Data | HTTP | Training data for reranking |
+
+### Commands
+
+| Command | Description |
+|:--------|:------------|
+| `list` | Display all available datasets |
+| `download <id>` | Download a specific dataset (HTTP files only) |
+| `download all` | Download all HTTP-accessible files |
+| `status` | Check download status |
+| `trigger-github` | Trigger GitHub Action for full downloads (including git clones) |
+
+### Node Breakdown
+
+#### Node 1: Webhook Entry / Chat Trigger
+- **Type:** `n8n-nodes-base.webhook` / `@n8n/n8n-nodes-langchain.chatTrigger`
+- **Path:** `/webhook/dataset-download`
+- **Method:** POST
+- **Input Schema:**
+```json
+{
+  "command": "string (list|download|status|trigger-github)",
+  "action": "string (alternative to command)",
+  "dataset": "string (optional, dataset ID)"
+}
+```
+
+#### Node 2: Dataset Registry
+- **Type:** `n8n-nodes-base.code`
+- **Purpose:** Define all available datasets
+- **Output:** Object containing all 13 dataset definitions
+
+#### Node 3: Command Parser
+- **Type:** `n8n-nodes-base.code`
+- **Purpose:** Parse user input and extract command/arguments
+
+#### Node 4: Command Switch
+- **Type:** `n8n-nodes-base.switch`
+- **Purpose:** Route to appropriate handler based on command
+
+#### Node 5: HTTP Download
+- **Type:** `n8n-nodes-base.httpRequest`
+- **Purpose:** Download HTTP-accessible files
+- **Timeout:** 120 seconds
+
+#### Node 6: Trigger GitHub Action
+- **Type:** `n8n-nodes-base.httpRequest`
+- **Purpose:** Trigger the `download_datasets.yml` workflow via GitHub API
+- **API:** `POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches`
+- **Credential:** GitHub Token (requires `repo` and `workflow` permissions)
+
+### Credentials Required
+
+1. **GitHub Token** (optional) - For triggering GitHub Actions
+   - Required permissions: `repo`, `workflow`
+   - Header: `Authorization: Bearer <token>`
+
+### Environment Variables
+
+```bash
+# GitHub (optional, for GitHub Actions trigger)
+GITHUB_TOKEN=ghp_xxxxxxxxxxxxx
+GITHUB_OWNER=LBJLincoln
+GITHUB_REPO=PROJET_N8N_ULTIMATE
+```
+
+### Testing
+
+**Via Chat Trigger:**
+```
+list              → Shows all 13 datasets
+download hotpotqa → Downloads HotpotQA files
+download all      → Downloads all HTTP files
+trigger-github    → Triggers full download via GitHub Actions
+```
+
+**Via Webhook:**
+```bash
+# List datasets
+curl -X POST "https://amoret.app.n8n.cloud/webhook/dataset-download" \
+  -H "Content-Type: application/json" \
+  -d '{"command": "list"}'
+
+# Download specific dataset
+curl -X POST "https://amoret.app.n8n.cloud/webhook/dataset-download" \
+  -H "Content-Type: application/json" \
+  -d '{"command": "download", "dataset": "squad"}'
+
+# Trigger GitHub Action
+curl -X POST "https://amoret.app.n8n.cloud/webhook/dataset-download" \
+  -H "Content-Type: application/json" \
+  -d '{"command": "trigger-github"}'
+```
+
+### GitHub Actions Integration
+
+The workflow can trigger the GitHub Action defined in `.github/workflows/download_datasets.yml`:
+
+1. **Manual trigger** via GitHub UI (workflow_dispatch)
+2. **API trigger** via n8n workflow (requires GitHub token)
+3. **Artifacts**: Downloaded datasets are available as workflow artifacts for 7 days
+
+---
+
 **CONTINUED IN NEXT RESPONSE DUE TO LENGTH...**
 
 *This document continues with detailed documentation for:*
@@ -1334,6 +1481,6 @@ curl -X POST "https://amoret.app.n8n.cloud/webhook/rag-tabular" \
 - 6. Monitor Workflow
 - 7. Orchestrator Workflow
 - 8. TestCopy Workflows
-- 9. Workflow Dependencies
+- 10. Workflow Dependencies
 
 Would you like me to continue with the remaining workflows?

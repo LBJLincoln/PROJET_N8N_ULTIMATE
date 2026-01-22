@@ -1,0 +1,325 @@
+{
+  "name": "Dataset Download Manager",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "dataset-download",
+        "options": {
+          "rawBody": false
+        }
+      },
+      "id": "webhook-entry",
+      "name": "Webhook Entry",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 400],
+      "webhookId": "dataset-download-webhook"
+    },
+    {
+      "parameters": {
+        "public": true,
+        "initialMessages": "Bienvenue dans le gestionnaire de datasets!\n\nCommandes disponibles:\n- **list** : Afficher tous les datasets disponibles\n- **download [nom]** : Télécharger un dataset spécifique\n- **download all** : Télécharger tous les datasets\n- **status** : Vérifier le statut des téléchargements\n- **trigger-github** : Déclencher le GitHub Action pour téléchargements complets",
+        "options": {}
+      },
+      "id": "chat-trigger",
+      "name": "Chat Trigger",
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 600]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Définition de tous les datasets disponibles\nconst DATASETS = {\n  'bbh': {\n    name: 'BIG-Bench Hard',\n    type: 'git',\n    url: 'https://github.com/suzgunmirac/BIG-Bench-Hard.git',\n    description: 'BIG-Bench Hard - Challenging reasoning tasks'\n  },\n  'spider2': {\n    name: 'Spider2 SQL',\n    type: 'git',\n    url: 'https://github.com/xlang-ai/Spider2.git',\n    description: 'Spider2 - SQL/database understanding tasks',\n    additionalFiles: [\n      { url: 'https://github.com/xlang-ai/Spider2/raw/main/spider2-lite/spider2-lite.jsonl', filename: 'spider2-lite.jsonl' },\n      { url: 'https://github.com/xlang-ai/Spider2/raw/main/spider2-snow/spider2-snow.jsonl', filename: 'spider2-snow.jsonl' }\n    ]\n  },\n  'hotpotqa': {\n    name: 'HotpotQA',\n    type: 'http',\n    files: [\n      { url: 'http://curtis.ml.cmu.edu/datasets/hotpot/hotpot_train_v1.1.json', filename: 'hotpot_train_v1.1.json' },\n      { url: 'http://curtis.ml.cmu.edu/datasets/hotpot/hotpot_dev_distractor_v1.json', filename: 'hotpot_dev_distractor_v1.json' }\n    ],\n    description: 'Multi-hop question answering dataset'\n  },\n  'musique': {\n    name: 'MuSiQue',\n    type: 'git',\n    url: 'https://github.com/StonyBrookNLP/musique.git',\n    description: 'Multi-step reasoning dataset'\n  },\n  'strategyqa': {\n    name: 'StrategyQA',\n    type: 'git',\n    url: 'https://github.com/eladsegal/strategyqa.git',\n    description: 'Strategic reasoning dataset',\n    additionalFiles: [\n      { url: 'https://storage.googleapis.com/strategyqa_data/strategyqa_train.json', filename: 'strategyqa_train.json' }\n    ]\n  },\n  'msmarco': {\n    name: 'MS MARCO',\n    type: 'http',\n    files: [\n      { url: 'https://msmarco.blob.core.windows.net/msmarco/train_v2.1.json.gz', filename: 'train_v2.1.json.gz', compressed: true }\n    ],\n    description: 'Large-scale ranking dataset'\n  },\n  'tabfact': {\n    name: 'Table Fact Checking',\n    type: 'git',\n    url: 'https://github.com/wenhuchen/Table-Fact-Checking.git',\n    description: 'Tabular data verification dataset',\n    additionalFiles: [\n      { url: 'https://github.com/wenhuchen/Table-Fact-Checking/raw/master/tokenized_data/train_examples.json', filename: 'train_examples.json' }\n    ]\n  },\n  'gsm8k': {\n    name: 'GSM8K',\n    type: 'git',\n    url: 'https://github.com/openai/grade-school-math.git',\n    description: 'Grade school math problems',\n    additionalFiles: [\n      { url: 'https://github.com/openai/grade-school-math/raw/master/dataset/GSM8K/train.jsonl', filename: 'train.jsonl' }\n    ]\n  },\n  'squad': {\n    name: 'SQuAD 2.0',\n    type: 'http',\n    files: [\n      { url: 'https://rajpurkar.github.io/SQuAD-explorer/dataset/train-v2.0.json', filename: 'squad_train-v2.0.json' },\n      { url: 'https://rajpurkar.github.io/SQuAD-explorer/dataset/dev-v2.0.json', filename: 'squad_dev-v2.0.json' }\n    ],\n    description: 'Reading comprehension dataset'\n  },\n  'pubmedqa': {\n    name: 'PubMedQA',\n    type: 'git',\n    url: 'https://github.com/pubmedqa/pubmedqa.git',\n    description: 'Biomedical question answering',\n    additionalFiles: [\n      { url: 'https://drive.google.com/uc?id=1RsGLINVce-0GsDkCLDuLZmoLuzfmoCuQ', filename: 'ori_pqau.json' }\n    ]\n  },\n  'wikihop': {\n    name: 'WikiHop',\n    type: 'http',\n    files: [\n      { url: 'https://huggingface.co/datasets/MoE-UNC/wikihop/resolve/main/data/train-00000-of-00001.parquet', filename: 'wikihop_train.parquet' }\n    ],\n    description: 'Knowledge-based QA dataset'\n  },\n  'climatefever': {\n    name: 'Climate FEVER',\n    type: 'git',\n    url: 'https://github.com/tdiggelm/climate-fever-dataset.git',\n    description: 'Climate claims verification',\n    additionalFiles: [\n      { url: 'https://huggingface.co/datasets/tdiggelm/climate_fever/resolve/main/data/climate_fever.jsonl', filename: 'climate_fever.jsonl' }\n    ]\n  },\n  'reranker': {\n    name: 'BGE Reranker Data',\n    type: 'http',\n    files: [\n      { url: 'https://huggingface.co/datasets/Shitao/bge-reranker-data/resolve/main/train.jsonl', filename: 'reranker_train.jsonl' }\n    ],\n    description: 'Training data for BGE reranking model'\n  }\n};\n\nreturn { DATASETS, datasetCount: Object.keys(DATASETS).length };"
+      },
+      "id": "dataset-registry",
+      "name": "Dataset Registry",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [200, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Récupérer l'input selon le trigger utilisé\nlet input = '';\nlet source = 'webhook';\n\ntry {\n  // Essayer d'abord le webhook\n  const webhookData = $node['Webhook Entry']?.json;\n  if (webhookData) {\n    input = webhookData.body?.command || webhookData.body?.action || 'list';\n    source = 'webhook';\n  }\n} catch(e) {}\n\ntry {\n  // Essayer le chat trigger\n  const chatData = $node['Chat Trigger']?.json;\n  if (chatData && chatData.chatInput) {\n    input = chatData.chatInput;\n    source = 'chat';\n  }\n} catch(e) {}\n\n// Parser la commande\nconst parts = input.toLowerCase().trim().split(/\\s+/);\nconst command = parts[0] || 'list';\nconst argument = parts.slice(1).join(' ') || null;\n\nconst DATASETS = $node['Dataset Registry'].json.DATASETS;\n\nreturn {\n  command,\n  argument,\n  source,\n  rawInput: input,\n  timestamp: new Date().toISOString(),\n  availableDatasets: Object.keys(DATASETS)\n};"
+      },
+      "id": "command-parser",
+      "name": "Command Parser",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [400, 500]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false },
+          "conditions": [
+            {
+              "id": "list",
+              "leftValue": "={{ $json.command }}",
+              "rightValue": "list",
+              "operator": { "type": "string", "operation": "equals" }
+            },
+            {
+              "id": "download",
+              "leftValue": "={{ $json.command }}",
+              "rightValue": "download",
+              "operator": { "type": "string", "operation": "equals" }
+            },
+            {
+              "id": "status",
+              "leftValue": "={{ $json.command }}",
+              "rightValue": "status",
+              "operator": { "type": "string", "operation": "equals" }
+            },
+            {
+              "id": "trigger-github",
+              "leftValue": "={{ $json.command }}",
+              "rightValue": "trigger-github",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ]
+        }
+      },
+      "id": "command-switch",
+      "name": "Command Switch",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [600, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "const DATASETS = $node['Dataset Registry'].json.DATASETS;\n\nlet output = '## 📦 Datasets Disponibles\\n\\n';\noutput += '| ID | Nom | Type | Description |\\n';\noutput += '|:---|:----|:-----|:------------|\\n';\n\nfor (const [id, dataset] of Object.entries(DATASETS)) {\n  const typeIcon = dataset.type === 'git' ? '🔗 Git' : '📥 HTTP';\n  output += `| \\`${id}\\` | ${dataset.name} | ${typeIcon} | ${dataset.description} |\\n`;\n}\n\noutput += '\\n---\\n';\noutput += `\\n**Total**: ${Object.keys(DATASETS).length} datasets\\n\\n`;\noutput += '### Commandes:\\n';\noutput += '- `download <id>` - Télécharger un dataset spécifique\\n';\noutput += '- `download all` - Télécharger tous les datasets HTTP\\n';\noutput += '- `trigger-github` - Déclencher GitHub Action pour téléchargement complet\\n';\n\nreturn {\n  action: 'list',\n  response: output,\n  datasetCount: Object.keys(DATASETS).length\n};"
+      },
+      "id": "list-datasets",
+      "name": "List Datasets",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [800, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const DATASETS = $node['Dataset Registry'].json.DATASETS;\nconst argument = $node['Command Parser'].json.argument;\n\n// Collecter tous les fichiers HTTP à télécharger\nlet filesToDownload = [];\nlet datasetId = argument;\n\nif (argument === 'all') {\n  // Télécharger tous les fichiers HTTP\n  for (const [id, dataset] of Object.entries(DATASETS)) {\n    if (dataset.type === 'http' && dataset.files) {\n      for (const file of dataset.files) {\n        filesToDownload.push({\n          datasetId: id,\n          datasetName: dataset.name,\n          ...file\n        });\n      }\n    }\n    // Ajouter aussi les fichiers additionnels\n    if (dataset.additionalFiles) {\n      for (const file of dataset.additionalFiles) {\n        filesToDownload.push({\n          datasetId: id,\n          datasetName: dataset.name,\n          ...file\n        });\n      }\n    }\n  }\n} else if (DATASETS[argument]) {\n  const dataset = DATASETS[argument];\n  if (dataset.type === 'http' && dataset.files) {\n    for (const file of dataset.files) {\n      filesToDownload.push({\n        datasetId: argument,\n        datasetName: dataset.name,\n        ...file\n      });\n    }\n  }\n  if (dataset.additionalFiles) {\n    for (const file of dataset.additionalFiles) {\n      filesToDownload.push({\n        datasetId: argument,\n        datasetName: dataset.name,\n        ...file\n      });\n    }\n  }\n  \n  // Si c'est un repo Git, on doit utiliser GitHub Action\n  if (dataset.type === 'git') {\n    return {\n      action: 'download',\n      needsGitAction: true,\n      datasetId: argument,\n      datasetName: dataset.name,\n      gitUrl: dataset.url,\n      message: `Le dataset '${dataset.name}' nécessite git clone. Utilisez 'trigger-github' pour un téléchargement complet.`\n    };\n  }\n} else {\n  return {\n    action: 'download',\n    error: true,\n    message: `Dataset '${argument}' non trouvé. Utilisez 'list' pour voir les datasets disponibles.`\n  };\n}\n\nif (filesToDownload.length === 0) {\n  return {\n    action: 'download',\n    error: true,\n    message: 'Aucun fichier HTTP à télécharger pour ce dataset.'\n  };\n}\n\nreturn filesToDownload.map(file => ({\n  action: 'download',\n  ...file\n}));"
+      },
+      "id": "prepare-download",
+      "name": "Prepare Download",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [800, 500]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {},
+          "conditions": [
+            {
+              "id": "has-error",
+              "leftValue": "={{ $json.error }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "equals" }
+            },
+            {
+              "id": "needs-git",
+              "leftValue": "={{ $json.needsGitAction }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "equals" }
+            }
+          ]
+        }
+      },
+      "id": "download-check",
+      "name": "Download Check",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1000, 500]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.url }}",
+        "options": {
+          "timeout": 120000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "http-download",
+      "name": "HTTP Download",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1200, 600]
+    },
+    {
+      "parameters": {
+        "jsCode": "const downloadInfo = $node['Prepare Download'].json;\nconst response = $input.first();\n\nconst statusCode = response?.json?.statusCode || response?.statusCode || 200;\nconst success = statusCode >= 200 && statusCode < 400;\n\nlet fileSize = 0;\ntry {\n  const contentLength = response?.json?.headers?.['content-length'];\n  fileSize = contentLength ? parseInt(contentLength) : 0;\n} catch(e) {}\n\nreturn {\n  datasetId: downloadInfo.datasetId,\n  datasetName: downloadInfo.datasetName,\n  filename: downloadInfo.filename,\n  url: downloadInfo.url,\n  success,\n  statusCode,\n  fileSize,\n  fileSizeFormatted: fileSize > 0 ? `${(fileSize / 1024 / 1024).toFixed(2)} MB` : 'Unknown',\n  timestamp: new Date().toISOString(),\n  message: success \n    ? `✅ Téléchargé: ${downloadInfo.filename}` \n    : `❌ Échec: ${downloadInfo.filename} (HTTP ${statusCode})`\n};"
+      },
+      "id": "download-result",
+      "name": "Download Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1400, 600]
+    },
+    {
+      "parameters": {
+        "jsCode": "const results = $input.all();\n\nlet successCount = 0;\nlet failCount = 0;\nlet totalSize = 0;\n\nlet output = '## 📥 Résultat du Téléchargement\\n\\n';\n\nfor (const item of results) {\n  const data = item.json;\n  \n  if (data.error || data.needsGitAction) {\n    output += `⚠️ ${data.message}\\n`;\n    continue;\n  }\n  \n  if (data.success) {\n    successCount++;\n    totalSize += data.fileSize || 0;\n    output += `✅ **${data.datasetName}** - \\`${data.filename}\\` (${data.fileSizeFormatted})\\n`;\n  } else {\n    failCount++;\n    output += `❌ **${data.datasetName}** - \\`${data.filename}\\` - Erreur HTTP ${data.statusCode}\\n`;\n  }\n}\n\noutput += '\\n---\\n';\noutput += `\\n**Résumé**: ${successCount} réussis, ${failCount} échecs\\n`;\nif (totalSize > 0) {\n  output += `**Taille totale**: ${(totalSize / 1024 / 1024).toFixed(2)} MB\\n`;\n}\n\nreturn {\n  action: 'download_complete',\n  response: output,\n  stats: {\n    successCount,\n    failCount,\n    totalSize\n  }\n};"
+      },
+      "id": "aggregate-results",
+      "name": "Aggregate Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1600, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "return {\n  action: 'status',\n  response: '## 📊 Statut des Téléchargements\\n\\n' +\n    'Pour vérifier le statut complet des datasets:\\n\\n' +\n    '1. **Via GitHub Actions**: Allez sur https://github.com/LBJLincoln/PROJET_N8N_ULTIMATE/actions\\n' +\n    '2. **Localement**: Vérifiez le dossier `datasets/` après exécution du script Python\\n\\n' +\n    '### Dernière exécution via n8n:\\n' +\n    `- Timestamp: ${new Date().toISOString()}\\n` +\n    '- Workflow: Dataset Download Manager\\n\\n' +\n    '_Note: Les téléchargements Git (repos complets) nécessitent GitHub Actions._'\n};"
+      },
+      "id": "check-status",
+      "name": "Check Status",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [800, 700]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.github.com/repos/LBJLincoln/PROJET_N8N_ULTIMATE/actions/workflows/download_datasets.yml/dispatches",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"ref\": \"main\"\n}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "trigger-github-action",
+      "name": "Trigger GitHub Action",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [800, 900],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "GITHUB_TOKEN_CREDENTIAL_ID",
+          "name": "GitHub Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first();\nconst statusCode = response?.json?.statusCode || response?.statusCode || 204;\nconst success = statusCode === 204 || statusCode === 200;\n\nlet output = '## 🚀 GitHub Action\\n\\n';\n\nif (success) {\n  output += '✅ **GitHub Action déclenché avec succès!**\\n\\n';\n  output += 'Le workflow `Download Datasets` a été lancé.\\n\\n';\n  output += '### Suivi:\\n';\n  output += '- 🔗 [Voir le workflow](https://github.com/LBJLincoln/PROJET_N8N_ULTIMATE/actions)\\n';\n  output += '- ⏱️ Durée estimée: 5-10 minutes\\n\\n';\n  output += '_Ce workflow télécharge tous les datasets, y compris les repos Git._';\n} else {\n  output += '❌ **Erreur lors du déclenchement**\\n\\n';\n  output += `Code HTTP: ${statusCode}\\n\\n`;\n  output += 'Vérifiez:\\n';\n  output += '1. Le token GitHub est configuré dans les credentials n8n\\n';\n  output += '2. Le token a les permissions `repo` et `workflow`\\n';\n  output += '3. Le fichier `.github/workflows/download_datasets.yml` existe';\n}\n\nreturn {\n  action: 'trigger-github',\n  response: output,\n  success,\n  statusCode\n};"
+      },
+      "id": "github-result",
+      "name": "GitHub Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1000, 900]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Formater la réponse finale pour le webhook\nconst result = $input.first().json;\n\nreturn {\n  success: !result.error,\n  action: result.action,\n  response: result.response || result.message,\n  timestamp: new Date().toISOString(),\n  stats: result.stats || null\n};"
+      },
+      "id": "format-response",
+      "name": "Format Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1800, 500]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "webhook-response",
+      "name": "Webhook Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2000, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Pour le chat trigger, retourner le texte formaté\nconst result = $input.first().json;\nreturn {\n  output: result.response || result.message || 'Commande exécutée.'\n};"
+      },
+      "id": "chat-response",
+      "name": "Chat Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2000, 600]
+    }
+  ],
+  "connections": {
+    "Webhook Entry": {
+      "main": [[{ "node": "Dataset Registry", "type": "main", "index": 0 }]]
+    },
+    "Chat Trigger": {
+      "main": [[{ "node": "Dataset Registry", "type": "main", "index": 0 }]]
+    },
+    "Dataset Registry": {
+      "main": [[{ "node": "Command Parser", "type": "main", "index": 0 }]]
+    },
+    "Command Parser": {
+      "main": [[{ "node": "Command Switch", "type": "main", "index": 0 }]]
+    },
+    "Command Switch": {
+      "main": [
+        [{ "node": "List Datasets", "type": "main", "index": 0 }],
+        [{ "node": "Prepare Download", "type": "main", "index": 0 }],
+        [{ "node": "Check Status", "type": "main", "index": 0 }],
+        [{ "node": "Trigger GitHub Action", "type": "main", "index": 0 }]
+      ]
+    },
+    "List Datasets": {
+      "main": [[{ "node": "Format Response", "type": "main", "index": 0 }]]
+    },
+    "Prepare Download": {
+      "main": [[{ "node": "Download Check", "type": "main", "index": 0 }]]
+    },
+    "Download Check": {
+      "main": [
+        [{ "node": "Aggregate Results", "type": "main", "index": 0 }],
+        [{ "node": "HTTP Download", "type": "main", "index": 0 }]
+      ]
+    },
+    "HTTP Download": {
+      "main": [[{ "node": "Download Result", "type": "main", "index": 0 }]]
+    },
+    "Download Result": {
+      "main": [[{ "node": "Aggregate Results", "type": "main", "index": 0 }]]
+    },
+    "Aggregate Results": {
+      "main": [[{ "node": "Format Response", "type": "main", "index": 0 }]]
+    },
+    "Check Status": {
+      "main": [[{ "node": "Format Response", "type": "main", "index": 0 }]]
+    },
+    "Trigger GitHub Action": {
+      "main": [[{ "node": "GitHub Result", "type": "main", "index": 0 }]]
+    },
+    "GitHub Result": {
+      "main": [[{ "node": "Format Response", "type": "main", "index": 0 }]]
+    },
+    "Format Response": {
+      "main": [
+        [{ "node": "Webhook Response", "type": "main", "index": 0 }],
+        [{ "node": "Chat Response", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "active": false,
+  "meta": {
+    "instanceId": "production-sota-2026",
+    "templateCredsSetupCompleted": true
+  },
+  "tags": [
+    { "name": "datasets" },
+    { "name": "download" },
+    { "name": "utility" }
+  ]
+}
