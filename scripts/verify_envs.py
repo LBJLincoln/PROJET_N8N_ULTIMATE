@@ -10,6 +10,11 @@ This script verifies:
 2. Redis (Upstash) connection
 3. Environment variables
 4. Executes database initialization SQL
+
+USAGE:
+  python3 scripts/verify_envs.py
+
+Credentials are loaded from .env file (not hardcoded for security).
 """
 
 import os
@@ -36,19 +41,36 @@ ERROR_LOG = PROJECT_DIR / "error-logs" / "agent1-error.txt"
 SQL_FILE = SCRIPT_DIR / "init-db.sql"
 ENV_FILE = PROJECT_DIR / ".env"
 
-# Database credentials (Supabase PostgreSQL)
+
+def load_env_file():
+    """Load environment variables from .env file."""
+    env_vars = {}
+    if ENV_FILE.exists():
+        with open(ENV_FILE) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    key, value = line.split("=", 1)
+                    env_vars[key.strip()] = value.strip().strip('"').strip("'")
+    return env_vars
+
+
+# Load from .env file
+ENV_VARS = load_env_file()
+
+# Database credentials (from .env)
 PG_CONFIG = {
-    "host": "db.ayqviqmxifzmhphiqfmj.supabase.co",
-    "port": "5432",
-    "database": "postgres",
-    "user": "postgres",
-    "password": "LxtBJKljhhBassDS",
+    "host": ENV_VARS.get("POSTGRES_HOST", "db.ayqviqmxifzmhphiqfmj.supabase.co"),
+    "port": ENV_VARS.get("POSTGRES_PORT", "5432"),
+    "database": ENV_VARS.get("POSTGRES_DB", "postgres"),
+    "user": ENV_VARS.get("POSTGRES_USER", "postgres"),
+    "password": ENV_VARS.get("POSTGRES_PASSWORD", ""),
 }
 
-# Redis credentials (Upstash)
+# Redis credentials (from .env)
 REDIS_CONFIG = {
-    "url": "https://dynamic-frog-47846.upstash.io",
-    "token": "AbrmAAIncDFlYjliNTA0MzRhNmQ0YjlkYjIzZGM1Y2I2NGJlNDRmMnAxNDc4NDY",
+    "url": ENV_VARS.get("REDIS_REST_URL", "https://dynamic-frog-47846.upstash.io"),
+    "token": ENV_VARS.get("REDIS_TOKEN", ""),
 }
 
 
@@ -99,6 +121,11 @@ def append_to_log(msg):
 
 def test_postgres_connection():
     """Test PostgreSQL connection using psql."""
+    if not PG_CONFIG["password"]:
+        log_error("POSTGRES_PASSWORD not set in .env file")
+        append_to_log("PostgreSQL connection: FAILED - password not configured")
+        return False
+
     log_info(f"Testing PostgreSQL connection to {PG_CONFIG['host']}...")
 
     try:
@@ -149,7 +176,7 @@ def execute_sql_file():
 
     if not SQL_FILE.exists():
         log_error(f"SQL file not found: {SQL_FILE}")
-        append_to_log(f"SQL execution: FAILED - file not found")
+        append_to_log("SQL execution: FAILED - file not found")
         return False
 
     try:
@@ -223,6 +250,11 @@ def test_postgres_with_python():
 
 def test_redis_connection():
     """Test Redis (Upstash) connection using REST API."""
+    if not REDIS_CONFIG["token"]:
+        log_error("REDIS_TOKEN not set in .env file")
+        append_to_log("Redis connection: FAILED - token not configured")
+        return False
+
     log_info(f"Testing Redis (Upstash) connection to {REDIS_CONFIG['url']}...")
 
     try:
@@ -273,8 +305,10 @@ def test_redis_with_library():
         import redis
 
         log_info("Testing Redis with redis-py...")
+        # Extract host from URL
+        host = REDIS_CONFIG["url"].replace("https://", "").replace("http://", "")
         r = redis.Redis(
-            host="dynamic-frog-47846.upstash.io",
+            host=host,
             port=6379,
             password=REDIS_CONFIG["token"],
             ssl=True,
@@ -304,37 +338,23 @@ def verify_env_file():
 
     if not ENV_FILE.exists():
         log_error(f".env file not found at {ENV_FILE}")
+        log_info("Please copy .env.example to .env and fill in the credentials")
         append_to_log("Environment file: NOT FOUND")
         return False
 
     required_vars = [
-        "POSTGRES_URL",
-        "POSTGRES_HOST",
         "POSTGRES_PASSWORD",
-        "REDIS_URL",
+        "REDIS_TOKEN",
         "OPENAI_API_KEY",
-        "COHERE_API_KEY",
-        "PINECONE_API_KEY",
-        "NEO4J_URL",
     ]
-
-    with open(ENV_FILE) as f:
-        content = f.read()
 
     missing = []
     for var in required_vars:
-        if var not in content:
+        if var not in ENV_VARS or not ENV_VARS[var]:
             missing.append(var)
-        else:
-            # Check if it has a value
-            for line in content.split("\n"):
-                if line.startswith(var + "="):
-                    value = line.split("=", 1)[1].strip()
-                    if not value or value.startswith("<") or value == "your-":
-                        missing.append(f"{var} (empty/placeholder)")
 
     if missing:
-        log_warn(f"Missing or placeholder environment variables: {missing}")
+        log_error(f"Missing environment variables in .env: {missing}")
         append_to_log(f"Environment file: INCOMPLETE - missing {missing}")
         return False
 
@@ -359,6 +379,16 @@ def main():
 
     # Step 1: Verify environment file
     results["env_file"] = verify_env_file()
+
+    if not results["env_file"]:
+        log_error("Cannot proceed without .env file configured")
+        print()
+        print("=" * 50)
+        print(f"{Colors.RED}Setup FAILED{Colors.NC}")
+        print("Please configure .env file with credentials first")
+        print(f"Check {ERROR_LOG} for details")
+        append_to_log("\n=== FINAL STATUS: Setup FAILED - .env not configured ===")
+        return 1
 
     # Step 2: Test PostgreSQL connection
     results["postgres_psql"] = test_postgres_connection()

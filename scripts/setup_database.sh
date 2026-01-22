@@ -5,6 +5,11 @@
 # Generated: 2026-01-22
 # Session: claude/setup-db-env-config-lLxYQ
 # Description: Sets up PostgreSQL tables and verifies connections
+#
+# USAGE:
+#   ./scripts/setup_database.sh
+#
+# Credentials are loaded from .env file (not hardcoded for security).
 # ============================================
 
 set -e
@@ -20,17 +25,40 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 ERROR_LOG="$PROJECT_DIR/error-logs/agent1-error.txt"
 SQL_FILE="$SCRIPT_DIR/init-db.sql"
+ENV_FILE="$PROJECT_DIR/.env"
 
-# Database credentials (Supabase PostgreSQL)
-PG_HOST="db.ayqviqmxifzmhphiqfmj.supabase.co"
-PG_PORT="5432"
-PG_DATABASE="postgres"
-PG_USER="postgres"
-PG_PASSWORD="LxtBJKljhhBassDS"
+# ============================================
+# Load Environment Variables
+# ============================================
 
-# Redis credentials (Upstash)
-REDIS_URL="https://dynamic-frog-47846.upstash.io"
-REDIS_TOKEN="AbrmAAIncDFlYjliNTA0MzRhNmQ0YjlkYjIzZGM1Y2I2NGJlNDRmMnAxNDc4NDY"
+load_env() {
+    if [ -f "$ENV_FILE" ]; then
+        # Export variables from .env file
+        set -a
+        source "$ENV_FILE"
+        set +a
+        return 0
+    else
+        echo -e "${RED}[ERROR]${NC} .env file not found at $ENV_FILE"
+        echo "Please copy .env.example to .env and fill in the credentials"
+        return 1
+    fi
+}
+
+# Database credentials (from .env with defaults)
+get_pg_config() {
+    PG_HOST="${POSTGRES_HOST:-db.ayqviqmxifzmhphiqfmj.supabase.co}"
+    PG_PORT="${POSTGRES_PORT:-5432}"
+    PG_DATABASE="${POSTGRES_DB:-postgres}"
+    PG_USER="${POSTGRES_USER:-postgres}"
+    PG_PASSWORD="${POSTGRES_PASSWORD:-}"
+}
+
+# Redis credentials (from .env with defaults)
+get_redis_config() {
+    REDIS_URL="${REDIS_REST_URL:-https://dynamic-frog-47846.upstash.io}"
+    REDIS_TOKEN="${REDIS_TOKEN:-}"
+}
 
 # ============================================
 # Helper Functions
@@ -67,6 +95,18 @@ check_psql() {
         log_error "psql command not found. Please install PostgreSQL client."
         log_error "Ubuntu/Debian: sudo apt-get install postgresql-client"
         log_error "macOS: brew install postgresql"
+        return 1
+    fi
+    return 0
+}
+
+check_credentials() {
+    if [ -z "$PG_PASSWORD" ]; then
+        log_error "POSTGRES_PASSWORD not set in .env file"
+        return 1
+    fi
+    if [ -z "$REDIS_TOKEN" ]; then
+        log_error "REDIS_TOKEN not set in .env file"
         return 1
     fi
     return 0
@@ -176,9 +216,24 @@ main() {
 
     SETUP_OK=true
 
+    # Step 0: Load environment variables
+    log_info "Loading environment variables from .env..."
+    if ! load_env; then
+        echo -e "${RED}Setup FAILED - .env file not found${NC}"
+        exit 1
+    fi
+
+    # Get configuration from environment
+    get_pg_config
+    get_redis_config
+
     # Step 1: Check prerequisites
     log_info "Checking prerequisites..."
     if ! check_psql; then
+        SETUP_OK=false
+    fi
+
+    if ! check_credentials; then
         SETUP_OK=false
     fi
 
