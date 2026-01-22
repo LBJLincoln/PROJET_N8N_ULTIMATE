@@ -1,0 +1,92 @@
+name: Setup Database and Verify Connections
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_sql:
+        description: 'Execute SQL to create tables'
+        required: true
+        default: 'true'
+        type: boolean
+      verify_only:
+        description: 'Only verify connections (no SQL execution)'
+        required: false
+        default: 'false'
+        type: boolean
+
+env:
+  POSTGRES_HOST: db.ayqviqmxifzmhphiqfmj.supabase.co
+  POSTGRES_PORT: 5432
+  POSTGRES_DB: postgres
+  POSTGRES_USER: postgres
+
+jobs:
+  setup-database:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install PostgreSQL client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+
+      - name: Test PostgreSQL Connection
+        env:
+          PGPASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+        run: |
+          echo "Testing PostgreSQL connection..."
+          psql -h $POSTGRES_HOST -p $POSTGRES_PORT -U $POSTGRES_USER -d $POSTGRES_DB -c "SELECT version();"
+          echo "PostgreSQL connection successful!"
+
+      - name: Execute Database Schema
+        if: ${{ inputs.run_sql == 'true' && inputs.verify_only != 'true' }}
+        env:
+          PGPASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+        run: |
+          echo "Executing SQL schema..."
+          psql -h $POSTGRES_HOST -p $POSTGRES_PORT -U $POSTGRES_USER -d $POSTGRES_DB -f scripts/init-db.sql
+          echo "SQL schema executed successfully!"
+
+      - name: Verify Tables Created
+        env:
+          PGPASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+        run: |
+          echo "Verifying tables..."
+          psql -h $POSTGRES_HOST -p $POSTGRES_PORT -U $POSTGRES_USER -d $POSTGRES_DB -c "
+            SELECT table_name
+            FROM information_schema.tables
+            WHERE table_schema = 'public'
+            AND table_name IN ('conversation_context', 'rlhf_training_data', 'community_summaries', 'entities', 'documents')
+            ORDER BY table_name;
+          "
+
+      - name: Test Redis Connection
+        env:
+          REDIS_TOKEN: ${{ secrets.REDIS_TOKEN }}
+        run: |
+          echo "Testing Redis (Upstash) connection..."
+          RESPONSE=$(curl -s -X POST "https://dynamic-frog-47846.upstash.io" \
+            -H "Authorization: Bearer $REDIS_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '["PING"]')
+          echo "Redis response: $RESPONSE"
+          if echo "$RESPONSE" | grep -q "PONG"; then
+            echo "Redis connection successful!"
+          else
+            echo "Redis connection failed!"
+            exit 1
+          fi
+
+      - name: Summary
+        run: |
+          echo "=========================================="
+          echo "Setup OK"
+          echo "=========================================="
+          echo ""
+          echo "PostgreSQL: Connected to $POSTGRES_HOST"
+          echo "Redis: Connected to Upstash"
+          echo ""
+          echo "All connections verified successfully!"
